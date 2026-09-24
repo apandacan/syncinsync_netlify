@@ -89,26 +89,45 @@ async function run() {
     await waitPressed(a, false);
     await waitPressed(b, false);
 
+    let releaseFailure;
+    const failedSaveGate = new Promise((resolve) => { releaseFailure = resolve; });
     await a.route("**/update", async (route) => {
       if (route.request().postDataJSON()?.action === "setPatientRoleCompleted") {
+        await failedSaveGate;
         await route.abort("failed");
       } else await route.continue();
     });
     await a.locator(selector()).click();
+    await a.waitForSelector(`${selector()}[aria-pressed="true"][aria-busy="true"]`);
+    assert.equal(await b.locator(selector()).getAttribute("aria-pressed"), "false");
+    // A remote update must survive both the pending preview and its rollback.
+    await b.locator(selector("p1", "plan")).click();
+    await waitPressed(a, true, "p1", "plan");
+    assert.equal(await a.locator(selector()).getAttribute("aria-pressed"), "true");
+    releaseFailure();
     await a.waitForFunction(() => document.querySelector("#errorBox").textContent.length > 0);
     await waitPressed(a, false);
+    await waitPressed(a, true, "p1", "plan");
     assert.equal(await a.locator(selector()).getAttribute("aria-disabled"), "false");
     await a.unroute("**/update");
 
     let completionRequests = 0;
+    let releaseSuccess;
+    const successfulSaveGate = new Promise((resolve) => { releaseSuccess = resolve; });
     await a.route("**/update", async (route) => {
       if (route.request().postDataJSON()?.action === "setPatientRoleCompleted") {
         completionRequests += 1;
-        await new Promise((resolve) => setTimeout(resolve, 150));
+        await successfulSaveGate;
       }
       await route.continue();
     });
     await a.locator(selector()).evaluate((button) => { button.click(); button.click(); });
+    await a.waitForSelector(`${selector()}[aria-pressed="true"][aria-busy="true"]`);
+    assert.equal(await b.locator(selector()).getAttribute("aria-pressed"), "false");
+    await b.locator(selector("p1", "plan")).click();
+    await waitPressed(a, false, "p1", "plan");
+    assert.equal(await a.locator(selector()).getAttribute("aria-pressed"), "true");
+    releaseSuccess();
     await waitPressed(a, true);
     await waitPressed(b, true);
     assert.equal(completionRequests, 1);
@@ -137,10 +156,31 @@ async function run() {
     await waitPressed(b, false, "p2", "meds");
     await b.waitForSelector('.patient-clickable-row:not(.ended-row) select[data-patient-id="p2"]');
     await a.setViewportSize({ width: 1440, height: 1000 });
-    for (const role of ["plan", "mse", "psychotherapy", "meds"]) {
+    for (const role of ["plan", "mse", "psychotherapy"]) {
       await a.locator(selector("p3", role)).click();
       await waitPressed(b, true, "p3", role);
     }
+    await a.locator("#selectedPatientSelect").selectOption("p3");
+    let releaseLastCheck;
+    const lastCheckGate = new Promise((resolve) => { releaseLastCheck = resolve; });
+    await a.route("**/update", async (route) => {
+      if (route.request().postDataJSON()?.action === "setPatientRoleCompleted") {
+        await lastCheckGate;
+        await route.abort("failed");
+      } else await route.continue();
+    });
+    await a.locator(selector("p3", "meds")).click();
+    await a.waitForSelector('.ended-row select[data-patient-id="p3"]');
+    assert.equal(await b.locator(selector("p3", "meds")).getAttribute("aria-pressed"), "false");
+    assert.equal(await a.locator("#selectedPatientSelect").inputValue(), "p3");
+    assert.equal(await a.locator('.ended-row:has(select[data-patient-id="p3"]) .mini-btn-danger').isDisabled(), true);
+    releaseLastCheck();
+    await waitPressed(a, false, "p3", "meds");
+    await a.waitForSelector('.patient-clickable-row:not(.ended-row) select[data-patient-id="p3"]');
+    assert.equal(await a.locator("#selectedPatientSelect").inputValue(), "p3");
+    await a.unroute("**/update");
+    await a.locator(selector("p3", "meds")).click();
+    await waitPressed(a, true, "p3", "meds");
     await a.waitForSelector('.ended-row select[data-patient-id="p3"]');
     await b.waitForSelector('.ended-row select[data-patient-id="p3"]');
     await a.locator(selector("p3", "meds")).click();
@@ -175,7 +215,7 @@ async function run() {
     for (const role of ["hpi", "plan", "mse", "psychotherapy"]) await waitPressed(a, true, "p3", role);
     await waitPressed(a, false, "p3", "meds");
     assert.deepEqual(errors, []);
-    console.log(JSON.stringify({ result: "passed", checks: "two clients, toggle, keyboard focus, reload, ended rows, reassign, failed request, duplicate click, mobile", desktop, mobile }));
+    console.log(JSON.stringify({ result: "passed", checks: "two clients, optimistic checks before save, concurrent update preserved on rollback, fifth-check rollback and selection, toggle, keyboard focus, reload, ended rows, reassign, failed request, duplicate click, mobile", desktop, mobile }));
   } finally {
     if (browser) await browser.close();
     await app.close();

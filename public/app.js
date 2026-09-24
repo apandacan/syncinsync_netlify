@@ -1,6 +1,6 @@
 const ROLE_KEYS = ["interviewer", "hpi", "plan", "mse", "psychotherapy", "meds"];
     const TAGGED_ROLE_KEYS = ["hpi", "plan", "mse", "psychotherapy", "meds"];
-    const pendingRoleCompletions = new Set();
+    const pendingRoleCompletions = new Map();
 
     const ROLE_META = {
       interviewer: { label: "Interviewer", suffix: "" },
@@ -1038,7 +1038,7 @@ function reconcileLocalStudentRoleTitles(serverStudents) {
     async function setPatientRoleCompleted(patient, roleKey, completed) {
       const pendingKey = `${patient.id}:${roleKey}`;
       if (pendingRoleCompletions.has(pendingKey)) return;
-      pendingRoleCompletions.add(pendingKey);
+      pendingRoleCompletions.set(pendingKey, completed);
       render();
       try {
         await apiUpdate({
@@ -1223,6 +1223,27 @@ function reconcileLocalStudentRoleTitles(serverStudents) {
       els.selectedPatientSelect.value = selected;
     }
 
+    function hasPendingRoleCompletion(patientId) {
+      return TAGGED_ROLE_KEYS.some((roleKey) => pendingRoleCompletions.has(`${patientId}:${roleKey}`));
+    }
+
+    function previewPatientCompletion(patient) {
+      if (!hasPendingRoleCompletion(patient.id)) return patient;
+      // Overlay pending checks on the latest confirmed board. Removing the overlay
+      // after a failed save preserves updates received from other students.
+      const completedRoles = { ...patient.completedRoles };
+      for (const roleKey of TAGGED_ROLE_KEYS) {
+        const key = `${patient.id}:${roleKey}`;
+        if (pendingRoleCompletions.has(key)) completedRoles[roleKey] = pendingRoleCompletions.get(key);
+      }
+      return {
+        ...patient,
+        completedRoles,
+        ended: TAGGED_ROLE_KEYS.every((roleKey) => completedRoles[roleKey] === true),
+        completionBeforeEnd: null,
+      };
+    }
+
     function renderPatientsTable() {
       els.patientsTableBody.innerHTML = "";
       els.patientCountInput.value = state.patients.length ? String(state.patients.length) : "";
@@ -1242,7 +1263,8 @@ function reconcileLocalStudentRoleTitles(serverStudents) {
 
       appendTimeDividerRowsAtIndex(0);
 
-      state.patients.forEach((patient, patientIndex) => {
+      state.patients.forEach((confirmedPatient, patientIndex) => {
+        const patient = previewPatientCompletion(confirmedPatient);
         const row = document.createElement("tr");
         row.className =
           "patient-clickable-row" +
@@ -1397,12 +1419,14 @@ function reconcileLocalStudentRoleTitles(serverStudents) {
         const endBtn = document.createElement("button");
         endBtn.className = "mini-btn mini-btn-danger";
         endBtn.textContent = "X";
+        endBtn.disabled = hasPendingRoleCompletion(patient.id);
         endBtn.title = patient.ended
           ? (patient.completionBeforeEnd ? "Restore previous checks" : "Clear all checks")
           : "Mark all five complete";
         endBtn.setAttribute("aria-label", `${patient.label}: ${endBtn.title}`);
         endBtn.addEventListener("click", (e) => {
           e.stopPropagation();
+          if (hasPendingRoleCompletion(patient.id)) return;
           togglePatientEnded(patient.id).catch((err) => showError(err.message || "Could not update encounter status"));
         });
 
