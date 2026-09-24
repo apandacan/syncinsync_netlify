@@ -7,6 +7,14 @@ const json = (status, body) => Response.json(body, { status, headers: { 'Cache-C
 // selected Supabase project and never reads a file snapshot.
 export function createHandler({ settings = getSettings, store = createStore } = {}) {
   return async (request) => {
+    const started = performance.now();
+    let readMs = 0;
+    let commitMs = 0;
+    let readCount = 0;
+    const timedResponse = (response) => {
+      response.headers.set('Server-Timing', `db_read;dur=${readMs.toFixed(1)}, db_commit;dur=${commitMs.toFixed(1)}, handler;dur=${(performance.now() - started).toFixed(1)}, db_reads;desc="${readCount}"`);
+      return response;
+    };
     const pathname = new URL(request.url).pathname;
     if (!['/state', '/update', '/runtime-config', '/events'].includes(pathname)) return json(404, { error: 'Not found' });
     if (pathname === '/events') return json(410, { error: 'This board uses Realtime. Reload the page to connect.' });
@@ -27,13 +35,24 @@ export function createHandler({ settings = getSettings, store = createStore } = 
       return json(200, { transport: 'supabase', url: config.url, publishableKey: config.publishableKey, boardId: config.boardId });
     }
     try {
-      const database = store(config);
-      if (pathname === '/state') return json(200, cloud.publicState(await database.read()));
+      const rawDatabase = store(config);
+      const database = {
+        async read() {
+          const start = performance.now();
+          readCount++;
+          try { return await rawDatabase.read(); } finally { readMs += performance.now() - start; }
+        },
+        async commit(input) {
+          const start = performance.now();
+          try { return await rawDatabase.commit(input); } finally { commitMs += performance.now() - start; }
+        },
+      };
+      if (pathname === '/state') return timedResponse(json(200, cloud.publicState(await database.read())));
       const result = await cloud.updateBoard(database, input);
-      return json(result.status, result.body);
+      return timedResponse(json(result.status, result.body));
     } catch {
       // Avoid leaking keys, database internals, or board contents into logs/errors.
-      return json(503, { error: 'Could not reach the shared board. Reconnect before retrying your change.' });
+      return timedResponse(json(503, { error: 'Could not reach the shared board. Reconnect before retrying your change.' }));
     }
   };
 }

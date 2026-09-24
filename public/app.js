@@ -2,6 +2,7 @@ const ROLE_KEYS = ["interviewer", "hpi", "plan", "mse", "psychotherapy", "meds"]
     const TAGGED_ROLE_KEYS = ["hpi", "plan", "mse", "psychotherapy", "meds"];
     const pendingRoleCompletions = new Map();
     const pendingRowCompletions = new Map();
+    const pendingRoleAssignments = new Map();
 
     const ROLE_META = {
       interviewer: { label: "Interviewer", suffix: "" },
@@ -487,7 +488,7 @@ const ROLE_KEYS = ["interviewer", "hpi", "plan", "mse", "psychotherapy", "meds"]
 
       if (active.dataset.patientId && active.dataset.roleKey) {
         return {
-          type: active.classList.contains("mini-btn-complete") ? "role-completion" : "patient-role",
+          type: active.classList.contains("mini-btn-complete") ? "role-completion" : active.classList.contains("mini-btn-self") ? "role-self" : "patient-role",
           patientId: active.dataset.patientId,
           roleKey: active.dataset.roleKey,
         };
@@ -508,6 +509,8 @@ const ROLE_KEYS = ["interviewer", "hpi", "plan", "mse", "psychotherapy", "meds"]
         selector = `select[data-patient-id="${snapshot.patientId}"][data-role-key="${snapshot.roleKey}"]`;
       } else if (snapshot.type === "role-completion") {
         selector = `button.mini-btn-complete[data-patient-id="${snapshot.patientId}"][data-role-key="${snapshot.roleKey}"]`;
+      } else if (snapshot.type === "role-self") {
+        selector = `button.mini-btn-self[data-patient-id="${snapshot.patientId}"][data-role-key="${snapshot.roleKey}"]`;
       }
 
       if (!selector) return;
@@ -803,7 +806,7 @@ function reconcileLocalStudentRoleTitles(serverStudents) {
       const patient = getSelectedPatient();
       if (!patient) return "";
 
-      const assignments = patient.assignments || emptyRoleAssignments();
+      const assignments = previewPatientAssignments(patient).assignments || emptyRoleAssignments();
       const studentsById = new Map(availableStudents().map((student) => [student.id, student]));
       const included = [];
 
@@ -951,6 +954,7 @@ function reconcileLocalStudentRoleTitles(serverStudents) {
     }
 
     async function apiUpdate(payload) {
+      const saveStarted = performance.now();
       const res = await fetch("/update", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -958,6 +962,11 @@ function reconcileLocalStudentRoleTitles(serverStudents) {
       });
 
       const data = await res.json().catch(() => ({}));
+      const saveMs = Math.round(performance.now() - saveStarted);
+      if (saveMs > 3000) {
+        // Diagnostics contain only durations, never student names or note text.
+        console.warn("Slow board save", { durationMs: saveMs, serverTiming: res.headers.get("Server-Timing") });
+      }
 
       if (!res.ok) {
         throw new Error(data.error || "Update failed");
@@ -1033,7 +1042,16 @@ function reconcileLocalStudentRoleTitles(serverStudents) {
     }
 
     async function updatePatientRole(patientId, roleKey, studentId) {
-      await apiUpdate({ action: "updatePatientRole", patientId, roleKey, studentId });
+      const pendingKey = `${patientId}:${roleKey}`;
+      if (pendingRoleAssignments.has(pendingKey)) return;
+      pendingRoleAssignments.set(pendingKey, studentId);
+      render();
+      try {
+        await apiUpdate({ action: "updatePatientRole", patientId, roleKey, studentId });
+      } finally {
+        pendingRoleAssignments.delete(pendingKey);
+        render();
+      }
     }
 
     async function setPatientRoleCompleted(patient, roleKey, completed) {
@@ -1241,6 +1259,15 @@ function reconcileLocalStudentRoleTitles(serverStudents) {
       els.selectedPatientSelect.value = selected;
     }
 
+    function previewPatientAssignments(patient) {
+      const assignments = { ...patient.assignments };
+      for (const roleKey of ROLE_KEYS) {
+        const key = `${patient.id}:${roleKey}`;
+        if (pendingRoleAssignments.has(key)) assignments[roleKey] = pendingRoleAssignments.get(key);
+      }
+      return { ...patient, assignments };
+    }
+
     function hasPendingRoleCompletion(patientId) {
       return TAGGED_ROLE_KEYS.some((roleKey) => pendingRoleCompletions.has(`${patientId}:${roleKey}`));
     }
@@ -1283,7 +1310,7 @@ function reconcileLocalStudentRoleTitles(serverStudents) {
       appendTimeDividerRowsAtIndex(0);
 
       state.patients.forEach((confirmedPatient, patientIndex) => {
-        const patient = previewPatientCompletion(confirmedPatient);
+        const patient = previewPatientCompletion(previewPatientAssignments(confirmedPatient));
         const row = document.createElement("tr");
         row.className =
           "patient-clickable-row" +
@@ -1364,6 +1391,9 @@ function reconcileLocalStudentRoleTitles(serverStudents) {
           });
 
           select.value = patient.assignments?.[roleKey] || "";
+          const assignmentPending = pendingRoleAssignments.has(`${patient.id}:${roleKey}`);
+          select.disabled = assignmentPending;
+          select.setAttribute("aria-busy", String(assignmentPending));
           select.addEventListener("change", (e) => {
             updatePatientRole(patient.id, roleKey, e.target.value).catch((err) => showError(err.message || "Role assignment failed"));
           });
@@ -1372,13 +1402,17 @@ function reconcileLocalStudentRoleTitles(serverStudents) {
           const isMine = !!state.currentUserStudentId && (patient.assignments?.[roleKey] === state.currentUserStudentId);
           selfBtn.className = "mini-btn mini-btn-self" + (isMine ? " active" : "");
           selfBtn.textContent = "👤";
+          selfBtn.dataset.patientId = patient.id;
+          selfBtn.dataset.roleKey = roleKey;
+          selfBtn.setAttribute("aria-busy", String(assignmentPending));
+          selfBtn.setAttribute("aria-disabled", String(state.isAdminMode || assignmentPending));
           selfBtn.disabled = state.isAdminMode;
           selfBtn.title = state.isAdminMode
             ? "Self-signup is unavailable in admin mode"
-            : (isMine ? "Remove yourself from this role" : "Sign yourself up for this role");
+            : assignmentPending ? "Saving role assignment..." : (isMine ? "Remove yourself from this role" : "Sign yourself up for this role");
           selfBtn.addEventListener("click", (e) => {
             e.stopPropagation();
-            if (state.isAdminMode) return;
+            if (state.isAdminMode || pendingRoleAssignments.has(`${patient.id}:${roleKey}`)) return;
             if (!state.currentUserStudentId) {
               openIdentityPrompt();
               return;

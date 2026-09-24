@@ -73,4 +73,19 @@ test('Netlify HTTP handler keeps secrets private and validates update requests',
   assert.throws(() => getSettings({ SUPABASE_URL: configuration.url, SUPABASE_PUBLISHABLE_KEY: 'sb_secret_accidental', SUPABASE_SECRET_KEY: 'server' }));
   const missing = createHandler({ settings: () => { throw new Error('missing'); } });
   assert.equal((await missing(request('/runtime-config'))).status, 503);
+  let commits = 0;
+  const timed = createHandler({ settings: () => configuration, store: () => ({
+    read: async () => ({ state: fixtureState(), revision: 0 }),
+    commit: async ({ response }) => (++commits === 1 ? { committed: false } : { committed: true, response }),
+  }) });
+  const saved = await timed(request('/update', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'updatePatientRole', patientId: 'p1', roleKey: 'hpi', studentId: 'b' }),
+  }));
+  assert.equal(saved.status, 200);
+  const timing = saved.headers.get('server-timing');
+  assert.match(timing, /db_read;dur=[\d.]+/);
+  assert.match(timing, /db_commit;dur=[\d.]+/);
+  assert.match(timing, /db_reads;desc="2"/);
+  assert.ok(!timing.includes(configuration.secretKey));
 });

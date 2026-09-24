@@ -39,6 +39,63 @@ async function run() {
     const selector = (patient = "p1", role = "hpi") => `.mini-btn-complete[data-patient-id="${patient}"][data-role-key="${role}"]`;
     const waitPressed = (page, pressed, patient = "p1", role = "hpi") =>
       page.waitForSelector(`${selector(patient, role)}[aria-pressed="${pressed}"][aria-busy="false"]`);
+    const signup = '.mini-btn-self[data-patient-id="p3"][data-role-key="hpi"]';
+    const assignment = (role = 'hpi') => `select[data-patient-id="p3"][data-role-key="${role}"]`;
+    async function waitAssignment(page, value, role = 'hpi') {
+      await page.waitForFunction(({ selector, value }) => {
+        const select = document.querySelector(selector);
+        return select.value === value && select.getAttribute('aria-busy') === 'false';
+      }, { selector: assignment(role), value });
+    }
+    async function holdAssignment(fail = false) {
+      let release;
+      let count = 0;
+      const gate = new Promise((resolve) => { release = resolve; });
+      await a.route('**/update', async (route) => {
+        if (route.request().postDataJSON()?.action === 'updatePatientRole') {
+          count++;
+          await gate;
+          if (fail) { await route.abort('failed'); return; }
+        }
+        await route.continue();
+      });
+      return { release, count: () => count };
+    }
+    await a.locator('#selectedPatientSelect').selectOption('p3');
+    let pendingSignup = await holdAssignment();
+    await a.locator(signup).focus();
+    await a.locator(signup).evaluate((el) => { el.click(); el.click(); });
+    assert.equal(await a.locator(assignment()).inputValue(), 'a');
+    assert.equal(await a.locator(signup).getAttribute('aria-busy'), 'true');
+    assert.equal(await a.locator(signup).evaluate((el) => el.classList.contains('active')), true);
+    assert.equal(await a.locator(signup).evaluate((el) => el === document.activeElement), true);
+    assert.match(await a.locator('#studentLine').innerText(), /Test Student A/);
+    assert.equal(await b.locator(assignment()).inputValue(), '');
+    await b.locator(assignment('plan')).selectOption('b');
+    await waitAssignment(a, 'b', 'plan');
+    assert.equal(await a.locator(assignment()).inputValue(), 'a');
+    pendingSignup.release();
+    await waitAssignment(a, 'a');
+    await waitAssignment(b, 'a');
+    assert.equal(pendingSignup.count(), 1);
+    await a.unroute('**/update');
+    // Removing yourself previews immediately; a failure restores the confirmed
+    // assignment without reverting a concurrent edit to another role.
+    pendingSignup = await holdAssignment(true);
+    await a.locator(signup).click();
+    assert.equal(await a.locator(assignment()).inputValue(), '');
+    assert.equal(await b.locator(assignment()).inputValue(), 'a');
+    await b.locator(assignment('plan')).selectOption('');
+    await waitAssignment(a, '', 'plan');
+    pendingSignup.release();
+    await waitAssignment(a, 'a');
+    assert.equal(await a.locator(assignment('plan')).inputValue(), '');
+    await a.waitForFunction(() => document.querySelector('#errorBox').textContent.length > 0);
+    await a.unroute('**/update');
+    await a.locator(signup).click();
+    await waitAssignment(a, '');
+    await waitAssignment(b, '');
+    await a.locator('#selectedPatientSelect').selectOption('p1');
     assert.equal(await a.locator(".mini-btn-complete").count(), 15);
     assert.equal(await a.locator('.mini-btn-complete[data-role-key="interviewer"]').count(), 0);
     assert.equal(await a.locator(selector("p3")).isDisabled(), false);
