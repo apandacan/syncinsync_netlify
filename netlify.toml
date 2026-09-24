@@ -1,0 +1,23 @@
+[build]
+  publish = "public"
+  command = "npm run build"
+
+[build.environment]
+  NODE_VERSION = "22"
+
+[functions]
+  directory = "netlify/functions"
+  node_bundler = "esbuild"
+
+[[headers]]
+  for = "/app.js"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+[[headers]]
+  for = "/board-connection.mjs"
+  [headers.values]
+    Cache-Control = "public, max-age=0, must-revalidate"
+
+# Do not use `npm start` as a build command: it starts a persistent HTTP server.
+# Do not add an SPA catch-all: API failures must not return index.html.

@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>InSync Roles Sync</title>
+    <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="wrap">
+    <div class="topbar">
+      <div>
+        <h1>InSync Roles Sync</h1>
+      </div>
+      <div class="buttons">
+        <button class="btn-guide-purple" id="placingMedsGuideBtn">Placing Meds</button>
+        <button class="btn-guide-warm" id="fourPsGuideBtn">4P&apos;s Guide</button>
+        <button class="btn-guide-blue" id="mseGuideBtn">MSE Guide</button>
+        <button class="btn-guide" id="studentGuideBtn">Student Guide</button>
+        <button class="btn-soft" id="resetBoardBtn">Reset board</button>
+        <button class="btn-soft" id="exitAdminModeBtn" hidden>Exit admin mode</button>
+      </div>
+    </div>
+
+    <div class="banner">
+      <strong>Shared live for everyone:</strong> student names, custom role titles, and patient role assignments.
+      <strong>Local only:</strong> pasted HPI and generated updated HPI.
+      Only non-PHI should go into the shared board.
+    </div>
+
+    <section class="card">
+      <div class="topbar topbar-center">
+        <div>
+          <h2>Patient assignment board</h2>
+          <p class="helper">Patients are rows and roles are columns. You can sign up manually, use the green person button to sign yourself up instantly, randomize a single patient, or randomize the whole schedule.</p>
+        </div>
+        <div class="status waiting" id="statusPill">Connecting</div>
+      </div>
+
+      <div class="toolbar">
+        <label>
+          <span class="label">How many patients today?</span>
+          <input id="patientCountInput" type="number" min="0" max="50" placeholder="0" />
+        </label>
+        <button class="btn-soft" id="applyPatientCountBtn">Populate patients</button>
+        <button class="btn-soft" id="randomizeScheduleBtn">Randomize entire schedule</button>
+        <button class="btn-soft" id="clearScheduleAssignmentsBtn">Clear assignments</button>
+        <button class="btn-soft" id="clearBoardBtn">Clear board</button>
+      </div>
+
+
+      <div class="notice" id="lastSync"></div>
+      <div class="error" id="errorBox"></div>
+
+      <div class="patient-table-wrap" id="patientTableWrap">
+        <div class="patient-table-scroll" id="patientTableScroll">
+          <table id="patientTable">
+            <thead>
+              <tr>
+                <th>Patient</th>
+                <th>Interviewer</th>
+                <th>HPI</th>
+                <th>Plan</th>
+                <th>MSE</th>
+                <th>Psychotherapy</th>
+                <th>Meds</th>
+                <th>Row action</th>
+              </tr>
+            </thead>
+            <tbody id="patientsTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <div class="grid-2">
+      <section class="card student-list-card">
+        <div>
+          <h2>Shared student list</h2>
+          <p class="helper">This syncs live for everyone with the app open. Each person can also have a custom role title, like Medical Student or Premedical Student.</p>
+        </div>
+        <div class="buttons">
+          <button class="btn" id="addStudentBtn">Add student</button>
+        </div>
+        <div id="studentsList" class="row"></div>
+      </section>
+
+      <section class="card">
+        <div>
+          <h2>Local-only HPI box</h2>
+          <p class="helper">You can use the dropdown or click an active patient row in the assignment board to choose which one drives the note line. Interviewer is included in the list if assigned, but does not get a tag.</p>
+        </div>
+
+        <label>
+          <span class="label">Use assignments from patient</span>
+          <select id="selectedPatientSelect"></select>
+        </label>
+
+        <div class="student-line-block">
+          <div class="student-line-header">
+            <span class="label">Generated student line</span>
+            <button class="btn-soft student-line-copy-btn" id="copyStudentLineBtn">Copy</button>
+          </div>
+          <div class="mono" id="studentLine">Add patients and assign roles.</div>
+        </div>
+
+        <label>
+          <span class="label">Old HPI</span>
+          <textarea id="oldHpi" placeholder="Paste prior HPI here"></textarea>
+        </label>
+        <label>
+          <span class="label">Updated HPI</span>
+          <textarea id="updatedHpi" class="readonly" readonly></textarea>
+        </label>
+      </section>
+    </div>
+    <div class="footer-note">made with <span class="heart-red">❤</span> by DZ for Dr. Mao&apos;s rotation</div>
+  </div>
+
+
+
+
+  <div class="update-popup" id="updatePopup">
+    <div class="update-popup-header">
+      <div>
+        <div class="update-popup-title">SyncInSync was updated!</div>
+        <div class="update-popup-date">Updated 9/8/2026</div>
+      </div>
+      <button class="update-popup-close" id="closeUpdatePopupBtn" aria-label="Close update popup">✕</button>
+    </div>
+    <div class="update-popup-body">
+      <div class="update-popup-line">Added check buttons next to signup buttons to track which parts are finished and what still needs to be done.</div>
+      <div class="update-popup-line">Completed rows are automatically crossed out.</div>
+      <div class="update-popup-contact">For bug reports and suggestions: <a href="mailto:daneel.zheng@gmail.com">daneel.zheng@gmail.com</a></div>
+      <div class="update-popup-signature">- Daniel</div>
+    </div>
+    <label class="update-popup-checkbox">
+      <input type="checkbox" id="hideUpdatePopupCheckbox" />
+      <span>Do not show again</span>
+    </label>
+  </div>
+
+  <div class="guide-password-overlay" id="guidePasswordOverlay">
+    <div class="guide-password-modal">
+      <div class="guide-password-title">Student Guide</div>
+      <div class="guide-password-subtitle">Enter the password to open this guide.</div>
+      <label>
+        <span class="label">Password</span>
+        <input id="guidePasswordInput" type="password" placeholder="Enter password" />
+      </label>
+      <div class="buttons buttons-end">
+        <button class="btn" id="guidePasswordSubmitBtn">Open</button>
+      </div>
+      <div class="error" id="guidePasswordError"></div>
+    </div>
+  </div>
+
+  <div class="student-guide-overlay" id="studentGuideOverlay">
+    <div class="student-guide-modal">
+      <div class="student-guide-header">
+        <div>
+          <div class="student-guide-title" id="guideModalTitle">Student Guide</div>
+          <div class="student-guide-subtitle" id="guideModalSubtitle">PDF viewer</div>
+        </div>
+        <div class="student-guide-actions">
+          <button class="student-guide-download-btn" id="downloadGuideBtn" aria-label="Download guide">Download</button>
+          <button class="student-guide-zoom-btn" id="zoomOutGuideBtn" aria-label="Zoom out">−</button>
+          <button class="student-guide-zoom-readout" id="guideZoomReadout" aria-label="Current zoom">125%</button>
+          <button class="student-guide-zoom-btn" id="zoomResetGuideBtn" aria-label="Reset zoom">Reset</button>
+          <button class="student-guide-zoom-btn" id="zoomInGuideBtn" aria-label="Zoom in">+</button>
+          <button class="student-guide-close" id="closeStudentGuideBtn" aria-label="Close Guide">✕</button>
+        </div>
+      </div>
+      <div class="student-guide-scroll" id="studentGuideScroll">
+        <div class="student-guide-status" id="studentGuideStatus">Loading guide...</div>
+        <div class="student-guide-pages" id="studentGuidePages"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="identity-overlay" id="identityOverlay">
+    <div class="identity-card">
+      <div class="identity-card-inner">
+        <div class="identity-title">Welcome</div>
+        <div class="identity-sub">Enter your name once so you can sign yourself up quickly. You can still add or edit students manually later.</div>
+        <label>
+          <span class="label">Your name</span>
+          <input id="identityNameInput" placeholder="Full name" />
+        </label>
+        <label>
+          <span class="label">Your role</span>
+          <input id="identityRoleInput" value="Medical Student" placeholder="Medical Student" />
+        </label>
+        <div class="buttons buttons-end">
+          <button class="btn" id="identitySaveBtn">Save and continue</button>
+        </div>
+        <div class="error" id="identityError"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

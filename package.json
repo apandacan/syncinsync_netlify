@@ -1,0 +1,21 @@
+{
+  "name": "syncinsync_netlify",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Shared live course board with patient-role table and local-only HPI",
+  "scripts": {
+    "start": "node server.js",
+    "build": "node scripts/build.mjs",
+    "test": "node --test",
+    "test:browser": "node test-support/role-completion-browser.js && node test-support/admin-mode-browser.js",
+    "test:cloud-browser": "node scripts/run-cloud-browser.cjs"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "2.117.1"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.5.8",
+    "esbuild": "0.28.2",
+    "ws": "8.21.3"
+  }
+}
