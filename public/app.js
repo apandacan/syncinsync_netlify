@@ -1,6 +1,7 @@
 const ROLE_KEYS = ["interviewer", "hpi", "plan", "mse", "psychotherapy", "meds"];
     const TAGGED_ROLE_KEYS = ["hpi", "plan", "mse", "psychotherapy", "meds"];
     const pendingRoleCompletions = new Map();
+    const pendingRowCompletions = new Map();
 
     const ROLE_META = {
       interviewer: { label: "Interviewer", suffix: "" },
@@ -1037,7 +1038,7 @@ function reconcileLocalStudentRoleTitles(serverStudents) {
 
     async function setPatientRoleCompleted(patient, roleKey, completed) {
       const pendingKey = `${patient.id}:${roleKey}`;
-      if (pendingRoleCompletions.has(pendingKey)) return;
+      if (pendingRoleCompletions.has(pendingKey) || pendingRowCompletions.has(patient.id)) return;
       pendingRoleCompletions.set(pendingKey, completed);
       render();
       try {
@@ -1080,7 +1081,24 @@ function reconcileLocalStudentRoleTitles(serverStudents) {
     }
 
     async function togglePatientEnded(patientId) {
-      await apiUpdate({ action: "togglePatientEnded", patientId });
+      if (pendingRowCompletions.has(patientId) || hasPendingRoleCompletion(patientId)) return;
+      const patient = state.patients.find((item) => item.id === patientId);
+      if (!patient) return;
+      const ended = TAGGED_ROLE_KEYS.every((key) => patient.completedRoles?.[key] === true);
+      const completedRoles = { ...patient.completedRoles };
+      for (const key of TAGGED_ROLE_KEYS) completedRoles[key] = ended ? patient.completionBeforeEnd?.[key] === true : true;
+      pendingRowCompletions.set(patientId, {
+        completedRoles,
+        ended: TAGGED_ROLE_KEYS.every((key) => completedRoles[key]),
+        completionBeforeEnd: ended ? null : { ...patient.completedRoles },
+      });
+      render();
+      try {
+        await apiUpdate({ action: "togglePatientEnded", patientId });
+      } finally {
+        pendingRowCompletions.delete(patientId);
+        render();
+      }
     }
 
     async function connectBoard() {
@@ -1228,6 +1246,7 @@ function reconcileLocalStudentRoleTitles(serverStudents) {
     }
 
     function previewPatientCompletion(patient) {
+      if (pendingRowCompletions.has(patient.id)) return { ...patient, ...pendingRowCompletions.get(patient.id) };
       if (!hasPendingRoleCompletion(patient.id)) return patient;
       // Overlay pending checks on the latest confirmed board. Removing the overlay
       // after a failed save preserves updates received from other students.
@@ -1374,7 +1393,7 @@ function reconcileLocalStudentRoleTitles(serverStudents) {
           if (TAGGED_ROLE_KEYS.includes(roleKey)) {
             const completeBtn = document.createElement("button");
             const completed = patient.completedRoles?.[roleKey] === true;
-            const pending = pendingRoleCompletions.has(`${patient.id}:${roleKey}`);
+            const pending = pendingRoleCompletions.has(`${patient.id}:${roleKey}`) || pendingRowCompletions.has(patient.id);
             completeBtn.type = "button";
             completeBtn.className = "mini-btn mini-btn-complete";
             completeBtn.dataset.patientId = patient.id;
@@ -1388,7 +1407,7 @@ function reconcileLocalStudentRoleTitles(serverStudents) {
             completeBtn.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5" /></svg>';
             completeBtn.addEventListener("click", (e) => {
               e.stopPropagation();
-              if (pendingRoleCompletions.has(`${patient.id}:${roleKey}`)) return;
+              if (pendingRoleCompletions.has(`${patient.id}:${roleKey}`) || pendingRowCompletions.has(patient.id)) return;
               setPatientRoleCompleted(patient, roleKey, !completed).catch((err) => {
                 showError(err.message || "Could not save role completion. Please try again.");
               });
@@ -1419,7 +1438,8 @@ function reconcileLocalStudentRoleTitles(serverStudents) {
         const endBtn = document.createElement("button");
         endBtn.className = "mini-btn mini-btn-danger";
         endBtn.textContent = "X";
-        endBtn.disabled = hasPendingRoleCompletion(patient.id);
+        endBtn.disabled = hasPendingRoleCompletion(patient.id) || pendingRowCompletions.has(patient.id);
+        endBtn.setAttribute("aria-busy", String(pendingRowCompletions.has(patient.id)));
         endBtn.title = patient.ended
           ? (patient.completionBeforeEnd ? "Restore previous checks" : "Clear all checks")
           : "Mark all five complete";

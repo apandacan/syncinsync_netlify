@@ -62,6 +62,58 @@ async function run() {
     await waitPressed(a, true);
     assert.equal(await a.locator("#updatePopup").isVisible(), false);
 
+    const firstRow = a.locator('tr.patient-clickable-row:has(select[data-patient-id="p1"])');
+    async function holdX(fail = false) {
+      let release;
+      let requests = 0;
+      const gate = new Promise((resolve) => { release = resolve; });
+      await a.route("**/update", async (route) => {
+        if (route.request().postDataJSON()?.action === "togglePatientEnded") {
+          requests++;
+          await gate;
+          if (fail) { await route.abort("failed"); return; }
+        }
+        await route.continue();
+      });
+      return { release, requests: () => requests };
+    }
+    // Failed X removes only the local preview, retaining another student's edit.
+    let pendingX = await holdX(true);
+    await firstRow.locator('.mini-btn-danger').click();
+    assert.equal(await firstRow.evaluate((el) => el.classList.contains('ended-row')), true);
+    assert.equal(await a.locator(selector('p1', 'meds')).getAttribute('aria-pressed'), 'true');
+    assert.equal(await a.locator(selector('p1', 'meds')).getAttribute('aria-busy'), 'true');
+    assert.equal(await b.locator(selector('p1', 'meds')).getAttribute('aria-pressed'), 'false');
+    await b.locator('select[data-patient-id="p1"][data-role-key="plan"]').selectOption('b');
+    await a.waitForFunction(() => document.querySelector('select[data-patient-id="p1"][data-role-key="plan"]').value === 'b');
+    assert.equal(await firstRow.evaluate((el) => el.classList.contains('ended-row')), true);
+    pendingX.release();
+    await waitPressed(a, false, 'p1', 'meds');
+    await a.waitForFunction(() => document.querySelector('#errorBox').textContent.length > 0);
+    assert.equal(await firstRow.evaluate((el) => el.classList.contains('ended-row')), false);
+    assert.equal(await a.locator('select[data-patient-id="p1"][data-role-key="plan"]').inputValue(), 'b');
+    await a.unroute('**/update');
+    // Both complete and restore render before the server receives the held save.
+    pendingX = await holdX();
+    await firstRow.locator('.mini-btn-danger').evaluate((el) => { el.click(); el.click(); });
+    assert.equal(await firstRow.evaluate((el) => el.classList.contains('ended-row')), true);
+    assert.equal(await b.locator(selector('p1', 'meds')).getAttribute('aria-pressed'), 'false');
+    pendingX.release();
+    await waitPressed(a, true, 'p1', 'meds');
+    await waitPressed(b, true, 'p1', 'meds');
+    assert.equal(pendingX.requests(), 1);
+    await a.unroute('**/update');
+    pendingX = await holdX();
+    await firstRow.locator('.mini-btn-danger').click();
+    assert.equal(await firstRow.evaluate((el) => el.classList.contains('ended-row')), false);
+    assert.equal(await a.locator(selector()).getAttribute('aria-pressed'), 'true');
+    assert.equal(await a.locator(selector('p1', 'meds')).getAttribute('aria-pressed'), 'false');
+    assert.equal(await b.locator(selector('p1', 'meds')).getAttribute('aria-pressed'), 'true');
+    pendingX.release();
+    await waitPressed(a, false, 'p1', 'meds');
+    await waitPressed(b, false, 'p1', 'meds');
+    await a.unroute('**/update');
+
     const secondRow = a.locator("tr.patient-clickable-row").filter({ has: a.locator(selector("p2")) });
     await secondRow.locator('button[title="Mark all five complete"]').click();
     await waitPressed(b, true, "p2", "plan");
