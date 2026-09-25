@@ -50,6 +50,12 @@ async function startCloudFixture(initial) {
       if (pathname.startsWith('/rest/v1/')) {
         if (req.headers.apikey !== settings().secretKey) return reply(res, 403, { message: 'Test API key required' });
         if (pathname === '/rest/v1/syncinsync_boards' && req.method === 'GET') return reply(res, 200, await database.store.read());
+        if (pathname === '/rest/v1/rpc/syncinsync_apply_action' && req.method === 'POST') {
+          const args = JSON.parse(body);
+          const result = await database.store.apply({ input: args.p_input, requestId: args.p_request_id });
+          if (result.status === 200) publish(await database.store.read());
+          return reply(res, 200, result);
+        }
         if (pathname === '/rest/v1/rpc/syncinsync_commit' && req.method === 'POST') {
           const args = JSON.parse(body);
           const result = await database.store.commit({ expectedRevision: args.p_expected_revision, state: args.p_state, requestId: args.p_request_id, response: args.p_response });

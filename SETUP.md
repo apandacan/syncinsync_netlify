@@ -2,6 +2,66 @@
 
 This guide assumes you have never configured Supabase or Netlify before. Complete one numbered step at a time.
 
+## Already using the site? Install faster saves and the scheduled check
+
+This upgrade keeps your current board. You do not need another project or new API keys.
+It makes green signup/removal, checkmarks, and the red X use one database call.
+Bulk actions, including randomizing the schedule, keep their existing save logic.
+
+### A. Run the database upgrade once
+
+1. Open **File Explorer** on your computer.
+2. Click its address bar and paste this folder, then press **Enter**:
+
+   ```text
+   C:\Users\danee\OneDrive\Documents\GitHub\syncinsync_netlify\supabase
+   ```
+
+3. Find **fast-actions.sql** (Windows may show it as **fast-actions** if extensions are hidden).
+4. Right-click that file and choose **Open with → Notepad**. If needed, choose **Choose another app**, then **Notepad**.
+5. Inside Notepad, press **Ctrl+A**, then **Ctrl+C**. You are copying the file's SQL text, not its filename.
+6. Open [Supabase](https://supabase.com/dashboard) and select the **existing project used by your Netlify board**.
+7. Click **SQL Editor** in Supabase's left sidebar. Click **+** or **New query** to open an empty query.
+8. Click inside that new query and press **Ctrl+V**. You should see many lines beginning with an upgrade comment and ending in `commit;`. If you only see a filename or path, return to step 4.
+9. Click **Run**. If Supabase warns about destructive operations, confirm running this exact upgrade: it replaces one function and its permissions; it does not clear the board or drop tables. It also defines cleanup for old request receipts.
+10. Wait for **Success. No rows returned.** If you see a red error, stop and share that error text.
+
+This script is also safe to rerun. The SQL file is [supabase/fast-actions.sql](supabase/fast-actions.sql).
+
+### B. Push the updated code through GitHub Desktop
+
+1. Open **GitHub Desktop**.
+2. In **Current repository**, choose **syncinsync_netlify**. Use **Repository → Show in Explorer** if you need to confirm the folder.
+3. Open **Changes**. Review the faster-save and scheduled-check files. Leave private files such as `.env` and `shared_state.json` out of the commit.
+4. In **Summary**, type `Speed up board clicks and add Supabase scheduled check`.
+5. Click **Commit to main** (or the name of your current deployment branch).
+6. Click **Push origin** at the top.
+7. Open [Netlify](https://app.netlify.com/), select **syncinsync**, and click **Deploys**.
+8. Wait for the new production deploy to say **Published**. If no deployment starts, open the last production deploy and choose **Options → Retry with latest branch commit**.
+9. Open the site and press **Ctrl+Shift+R** to reload it. Sign up for a role and check that a second browser receives the change.
+
+Running the SQL before pushing gives the first new deployment the faster path immediately.
+If code is deployed before the SQL, those buttons temporarily use the old saving method.
+The migration is additive: the old deployed app also continues to work after the SQL runs.
+
+### C. Verify the automatic Supabase check
+
+1. In your Netlify project, open **Cloud compute → Functions**.
+2. Select **supabase-keepalive**. It should have a **Scheduled** badge and a next-run time.
+3. Click **Run now** once.
+4. Open that function's logs. Look for **Supabase scheduled database check succeeded.**
+5. If it reports failure, confirm Supabase is active and the existing Supabase environment variables are available to production functions. No new variables are needed.
+
+Once deployed, this function reads only the board's revision every six hours (00:00, 06:00, 12:00, and 18:00 UTC). It does not edit students, assignments, or notes, and does not run a new site build. Scheduled executions run on published deploys, not automatically on previews. [Netlify scheduled functions](https://docs.netlify.com/build/functions/scheduled-functions/)
+
+This is a best-effort way to generate database activity, not a promise that a free project can never pause. Supabase says a few database requests each day are typically enough; one weekly ping is not a reliable threshold. Usage limits still apply. The scheduled check does not automatically resume an already paused project: open Supabase and click **Resume project** first. [Supabase pausing rules](https://supabase.com/docs/guides/platform/free-project-pausing/)
+
+If saves are still slow, the browser's **Slow board save** console message includes database timings. A migrated signup response has `db_reads;desc="0"` and a `db_atomic` timing; fallback saves show database reads. This helps diagnose the remaining delay without logging board contents or secret keys.
+
+---
+
+## First-time setup starts here
+
 **Where you are now:** your screenshots show that you have reached Supabase's SQL Editor. If you already created the new Supabase project, start at **Part 2**. If you already ran a script successfully, use the checks in Part 4 instead of guessing whether to repeat it.
 
 The app code is ready and has passed local tests. GitHub upload, hosted database setup, and deployment have not been verified from this task. Writing this guide did not perform those steps.
@@ -19,7 +79,7 @@ Use your existing accounts. You are creating separate projects, not replacing th
 The separate local project folder is:
 
 ```text
-C:\Users\danee\Documents\Codex\2026-09-24\syncinsync-netlify\outputs\syncinsync_netlify
+C:\Users\danee\OneDrive\Documents\GitHub\syncinsync_netlify
 ```
 
 You do not need to type that path into Supabase. Supabase's SQL Editor only accepts SQL code.
@@ -39,7 +99,7 @@ You do not need to type that path into Supabase. Supabase's SQL Editor only acce
 
 **You should see:** a dashboard for the newly named Supabase project, with a sidebar containing **SQL Editor** and **Table Editor**. Make sure the selected project is the new one before continuing.
 
-Free service has limits: Supabase currently lists a pause after one week of inactivity and no automatic backups on Free. You do not need a paid plan for this setup within its allowances. [Supabase plan details](https://supabase.com/pricing)
+Free service has limits: Supabase may pause projects with low database activity over seven days. The scheduled check described above helps generate activity, but does not guarantee exemption. You do not need a paid plan within its allowances. [Supabase pausing rules](https://supabase.com/docs/guides/platform/free-project-pausing/)
 
 ## Part 2 — Paste and run the FIRST SQL script
 
@@ -160,6 +220,8 @@ end $$;
 **You should see:** another success message. If it says `syncinsync_boards` does not exist, the first script has not completed successfully in this project. Return to Part 2.
 
 The second script adds the table to Supabase's Realtime publication, which is how committed changes reach connected browsers. [Supabase Realtime setup](https://supabase.com/docs/guides/realtime/postgres-changes)
+
+**Before continuing to Part 4:** complete **A. Run the database upgrade once** at the top of this guide. It installs the fast-action function in this same project. For a first-time installation, continue with Part 4 afterward; complete the scheduled-check verification after your first published deployment.
 
 ## Part 4 — Check that both scripts worked
 

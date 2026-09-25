@@ -46,10 +46,135 @@ test('SQL grants permit anonymous reads but deny direct writes and commit RPC', 
   assert.equal((await database.store.read()).state.patients.length, 0);
   await assert.rejects(database.db.exec("update public.syncinsync_boards set revision = 10"), /permission denied/);
   await assert.rejects(database.store.commit({ expectedRevision: 0, state: {}, requestId: randomUUID(), response: {} }), /permission denied/);
+  await assert.rejects(database.store.apply({ input: { action: 'togglePatientEnded', patientId: 'p1' }, requestId: randomUUID() }), /permission denied/);
   await assert.rejects(database.db.exec('select * from syncinsync_private.receipts'), /permission denied/);
   // RLS still hides receipts if ordinary read privileges are accidentally added.
   await database.db.exec('reset role; grant usage on schema syncinsync_private to anon; grant select on syncinsync_private.receipts to anon; set role anon;');
   assert.deepEqual((await database.db.query('select * from syncinsync_private.receipts')).rows, []);
+});
+
+test('atomic actions match the JS engine, including undo, validation, and old board defaults', async (t) => {
+  const { createBoard, normalizeState } = require('../lib/board.cjs');
+  const database = await createDatabase(fixtureState());
+  t.after(() => database.close());
+  const board = createBoard(fixtureState());
+  const withoutTime = state => { const value = normalizeState(state); delete value.updatedAt; return value; };
+  const sequence = [
+    { action: 'updatePatientRole', patientId: 'p1', roleKey: 'interviewer', studentId: 'b' },
+    { action: 'setPatientRoleCompleted', patientId: 'p1', roleKey: 'hpi', completed: true },
+    { action: 'togglePatientEnded', patientId: 'p1' },
+    // Assignment must preserve the saved partial-completion undo state.
+    { action: 'updatePatientRole', patientId: 'p1', roleKey: 'plan', studentId: '' },
+    { action: 'togglePatientEnded', patientId: 'p1' },
+    { action: 'togglePatientEnded', patientId: 'p1' },
+    { action: 'setPatientRoleCompleted', patientId: 'p1', roleKey: 'mse', completed: false },
+    { action: 'togglePatientEnded', patientId: 'p1' },
+    { action: 'togglePatientEnded', patientId: 'p1' },
+    ...['hpi','plan','mse','psychotherapy','meds'].map(roleKey =>
+      ({ action: 'setPatientRoleCompleted', patientId: 'p2', roleKey, completed: true })),
+    { action: 'togglePatientEnded', patientId: 'p2' },
+    { action: 'updatePatientRole', patientId: 'p2', roleKey: 'meds', studentId: 0 },
+    { action: 'updatePatientRole', patientId: 'p2', roleKey: 'meds', studentId: { name: 'invalid' } },
+    { action: 'setPatientRoleCompleted', patientId: 'p2', roleKey: 'interviewer', completed: true },
+    { action: 'setPatientRoleCompleted', patientId: 'p2', roleKey: 'hpi', completed: 'true' },
+    { action: 'setPatientRoleCompleted', patientId: 'p2', roleKey: 'hpi' },
+    { action: 'updatePatientRole', patientId: 'p2', roleKey: 'unknown' },
+    { action: 'updatePatientRole', patientId: 'p2' },
+    { action: 'togglePatientEnded', patientId: 'missing' },
+  ];
+  for (const input of sequence) {
+    const expected = board.applyUpdate(input);
+    const result = await updateBoard(database.store, input);
+    assert.equal(result.status, expected.status, JSON.stringify(input));
+    if (result.status !== 200) assert.deepEqual(result.body, expected.body);
+    assert.deepEqual(withoutTime((await database.store.read()).state), withoutTime(board.getState()), JSON.stringify(input));
+  }
+});
+
+test('atomic RPC preserves mixed edits, deduplicates across legacy saves, and migration is repeatable', async (t) => {
+  const database = await createDatabase(fixtureState());
+  t.after(() => database.close());
+  const legacy = { read: database.store.read, commit: database.store.commit };
+  const results = await Promise.all([
+    updateBoard(database.store, { action: 'updatePatientRole', patientId: 'p1', roleKey: 'hpi', studentId: 'b' }),
+    updateBoard(legacy, { action: 'updateStudentName', studentId: 'a', name: 'Renamed student' }),
+    updateBoard(database.store, { action: 'updatePatientRole', patientId: 'p2', roleKey: 'plan', studentId: 'a' }),
+  ]);
+  assert.ok(results.every(result => result.status === 200));
+  let row = await database.store.read();
+  assert.equal(row.state.students[0].name, 'Renamed student');
+  assert.equal(row.state.patients[0].assignments.hpi, 'b');
+  assert.equal(row.state.patients[1].assignments.plan, 'a');
+  assert.equal(Number(row.revision), 3);
+  for (const stores of [[legacy, database.store], [database.store, legacy]]) {
+    const input = { action: 'togglePatientEnded', patientId: 'p1', requestId: randomUUID() };
+    const first = await updateBoard(stores[0], input);
+    assert.deepEqual(await updateBoard(stores[1], input), first);
+  }
+  row = await database.store.read();
+  const fs = require('node:fs');
+  const path = require('node:path');
+  await database.db.exec(fs.readFileSync(path.join(__dirname, '../supabase/fast-actions.sql'), 'utf8'));
+  assert.deepEqual(await database.store.read(), row);
+  await database.db.exec('set role service_role');
+  assert.equal((await database.store.apply({ input: { action: 'togglePatientEnded', patientId: 'p2' }, requestId: randomUUID() })).status, 200);
+});
+
+test('real SDK and HTTP handler use one RPC with no board read for a signup', async (t) => {
+  const { startCloudFixture } = require('../test-support/cloud-fixture.cjs');
+  const fixture = await startCloudFixture(fixtureState());
+  t.after(() => fixture.close());
+  const response = await fetch(fixture.url + '/update', { method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ action: 'updatePatientRole', patientId: 'p1', roleKey: 'hpi', studentId: 'b' }) });
+  assert.equal(response.status, 200);
+  assert.equal((await response.json()).state.patients[0].assignments.hpi, 'b');
+  assert.match(response.headers.get('server-timing'), /db_reads;desc="0"/);
+  assert.match(response.headers.get('server-timing'), /db_atomic;dur=[\d.]+/);
+  assert.deepEqual(fixture.requests.filter(request => request.pathname.startsWith('/rest/')),
+    [{ method: 'POST', pathname: '/rest/v1/rpc/syncinsync_apply_action' }]);
+});
+
+test('missing RPC allows legacy rollout; other database errors never replay a toggle', async (t) => {
+  const { createStore } = await import('../lib/supabase-store.mjs');
+  const original = global.fetch;
+  t.after(() => { global.fetch = original; });
+  const settings = { url: 'https://example.supabase.co', secretKey: 'sb_secret_test', boardId: 'main' };
+  global.fetch = async () => Response.json({ code: 'PGRST202', message: 'missing function' }, { status: 404 });
+  assert.equal(await createStore(settings).apply({ input: {}, requestId: randomUUID() }), null);
+  global.fetch = async () => Response.json({ code: '57014', message: 'query timed out' }, { status: 500 });
+  await assert.rejects(createStore(settings).apply({ input: {}, requestId: randomUUID() }), /Could not save/);
+  let reads = 0;
+  const store = { apply: async () => null,
+    read: async () => { reads++; return { state: fixtureState(), revision: 0 }; },
+    commit: async ({ response }) => ({ committed: true, response }) };
+  assert.equal((await updateBoard(store, { action: 'togglePatientEnded', patientId: 'p1' })).status, 200);
+  assert.equal(reads, 1);
+  store.apply = async () => { throw new Error('timeout'); };
+  await assert.rejects(updateBoard(store, { action: 'togglePatientEnded', patientId: 'p1' }), /timeout/);
+  assert.equal(reads, 1);
+});
+
+test('scheduled check reads only revision, never writes, and reports failures without secrets', async (t) => {
+  const { createHandler, config } = await import('../netlify/functions/supabase-keepalive.mjs');
+  const { createStore } = await import('../lib/supabase-store.mjs');
+  const original = global.fetch;
+  t.after(() => { global.fetch = original; });
+  const requests = [];
+  global.fetch = async (url, options) => { requests.push({ url: String(url), method: options.method }); return Response.json({ revision: 7 }); };
+  const logs = [];
+  const handler = createHandler({ settings: () => ({ url: 'https://example.supabase.co', secretKey: 'sb_secret_test', boardId: 'main' }), store: createStore,
+    log: { info: value => logs.push(value), error: value => logs.push(value) } });
+  assert.equal((await handler()).status, 204);
+  assert.equal(config.schedule, '0 */6 * * *');
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].method, 'GET');
+  assert.equal(new URL(requests[0].url).searchParams.get('select'), 'revision');
+  assert.equal(new URL(requests[0].url).searchParams.get('id'), 'eq.main');
+  global.fetch = async () => Response.json({ message: 'sb_secret_test private details' }, { status: 503 });
+  await assert.rejects(handler(), /scheduled database check failed/);
+  assert.ok(logs.some(log => log.includes('failed')));
+  assert.ok(logs.every(log => !log.includes('sb_secret_test')));
 });
 
 test('Netlify HTTP handler keeps secrets private and validates update requests', async () => {

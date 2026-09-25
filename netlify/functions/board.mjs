@@ -10,9 +10,10 @@ export function createHandler({ settings = getSettings, store = createStore } = 
     const started = performance.now();
     let readMs = 0;
     let commitMs = 0;
+    let atomicMs = 0;
     let readCount = 0;
     const timedResponse = (response) => {
-      response.headers.set('Server-Timing', `db_read;dur=${readMs.toFixed(1)}, db_commit;dur=${commitMs.toFixed(1)}, handler;dur=${(performance.now() - started).toFixed(1)}, db_reads;desc="${readCount}"`);
+      response.headers.set('Server-Timing', `db_read;dur=${readMs.toFixed(1)}, db_commit;dur=${commitMs.toFixed(1)}, db_atomic;dur=${atomicMs.toFixed(1)}, handler;dur=${(performance.now() - started).toFixed(1)}, db_reads;desc="${readCount}"`);
       return response;
     };
     const pathname = new URL(request.url).pathname;
@@ -37,6 +38,10 @@ export function createHandler({ settings = getSettings, store = createStore } = 
     try {
       const rawDatabase = store(config);
       const database = {
+        ...(rawDatabase.apply ? { async apply(input) {
+          const start = performance.now();
+          try { return await rawDatabase.apply(input); } finally { atomicMs += performance.now() - start; }
+        } } : {}),
         async read() {
           const start = performance.now();
           readCount++;
